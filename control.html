@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Керування машинкою</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; touch-action: none; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #15181d; color: #eee;
+         display: flex; flex-direction: column; height: 100vh; padding: 12px; gap: 12px; }
+  #top { display: flex; gap: 10px; align-items: center; }
+  #connect { flex: 1; padding: 16px; font-size: 18px; border: 0; border-radius: 12px; background: #2b7de9; color: #fff; }
+  #status { font-size: 14px; opacity: .8; min-width: 110px; text-align: right; }
+  #pad { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 10px; }
+  .btn { border: 0; border-radius: 16px; background: #2a3039; color: #fff; font-size: 34px; }
+  .btn.active { background: #e9a02b; color: #000; }
+  .back { background: #262a31; }
+  .stop { background: #a33; }
+  #log { font: 12px monospace; opacity: .6; height: 1.4em; overflow: hidden; }
+</style>
+</head>
+<body>
+<div id="top">
+  <button id="connect">Підключитись</button>
+  <div id="status">не підключено</div>
+</div>
+
+<div id="pad">
+  <button class="btn" data-cmd="FL">↖</button>
+  <button class="btn" data-cmd="F">↑</button>
+  <button class="btn" data-cmd="FR">↗</button>
+  <button class="btn back" data-cmd="BL">↙<br><small style="font-size:12px">стоп</small></button>
+  <button class="btn stop" data-cmd="S">STOP</button>
+  <button class="btn back" data-cmd="BR">↘<br><small style="font-size:12px">стоп</small></button>
+  <div></div>
+  <button class="btn back" data-cmd="B">↓<br><small style="font-size:12px">стоп</small></button>
+  <div></div>
+</div>
+<div id="log"></div>
+
+<script>
+const SERVICE = 0xFFE0;       // HM-10
+const CHARACTERISTIC = 0xFFE1;
+const SEND_INTERVAL = 100;    // мс; Arduino failsafe = 400 мс
+
+let device = null, characteristic = null;
+let currentCmd = 'S', busy = false, timer = null;
+
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const connectBtn = document.getElementById('connect');
+
+function setStatus(t) { statusEl.textContent = t; }
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    alert('Web Bluetooth не підтримується. Використай Chrome на Android через HTTPS.');
+    return;
+  }
+  try {
+    setStatus('пошук...');
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [SERVICE]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE);
+    characteristic = await service.getCharacteristic(CHARACTERISTIC);
+    setStatus('підключено: ' + (device.name || 'HM-10'));
+    connectBtn.textContent = 'Відключитись';
+    startLoop();
+  } catch (e) {
+    setStatus('помилка');
+    logEl.textContent = e.message;
+  }
+}
+
+function onDisconnected() {
+  stopLoop();
+  characteristic = null;
+  setStatus('відключено');
+  connectBtn.textContent = 'Підключитись';
+}
+
+connectBtn.onclick = () => {
+  if (device && device.gatt.connected) device.gatt.disconnect();
+  else connect();
+};
+
+async function send(cmd) {
+  if (!characteristic || busy) return;
+  busy = true;
+  try {
+    const data = new TextEncoder().encode(cmd + '\n');
+    if (characteristic.writeValueWithoutResponse) await characteristic.writeValueWithoutResponse(data);
+    else await characteristic.writeValue(data);
+    logEl.textContent = 'TX: ' + cmd;
+  } catch (e) {
+    logEl.textContent = 'err: ' + e.message;
+  }
+  busy = false;
+}
+
+function startLoop() {
+  stopLoop();
+  timer = setInterval(() => send(currentCmd), SEND_INTERVAL);
+}
+function stopLoop() { if (timer) clearInterval(timer); timer = null; }
+
+function press(btn) {
+  document.querySelectorAll('.btn.active').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentCmd = btn.dataset.cmd;
+  send(currentCmd);
+}
+function release() {
+  document.querySelectorAll('.btn.active').forEach(b => b.classList.remove('active'));
+  currentCmd = 'S';
+  send('S');
+}
+
+document.querySelectorAll('.btn').forEach(btn => {
+  btn.addEventListener('pointerdown', e => { btn.setPointerCapture(e.pointerId); press(btn); });
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+});
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) release(); });
+</script>
+</body>
+</html>
